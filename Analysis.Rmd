@@ -1,0 +1,162 @@
+---
+title: "Causal Inference Project"
+authors: "Carlos Perez, Jonny Codd"
+output: html_notebook
+---
+
+Questions we could answer:
+- Estimate the causal effect of smoking cessation on weight gain.
+
+# Prepare notebook 
+
+```{r}
+# Packages
+library(readr)
+library(Hmisc)
+DIR <- "."
+```
+
+```{r}
+# Load data
+data <- read.csv(file.path(DIR, '/nhefs_complete.csv'))
+```
+
+# Analysis
+
+```{r}
+# Simplest model 
+simple_model <- lm(wt82_71 ~ qsmk, data)
+summary(simple_model)
+```
+
+
+Running a simple linear regression of weight change on smoking cessation suggests that quitting smoking is significantly associated with weight gain. Obviously, this regression suffers from severe bias issues. That is, the observed association between smoking cessation and weight gain might be influenced by underlying factors not captured in a simple linear regression. 
+
+Here are the key issues that contribute to the bias:
+
+1. Reverse Causation: It is possible that the direction of the causality is misunderstood. For instance, individuals who are gaining weight might be more inclined to quit smoking for health reasons. 
+
+2. Confounding Variables: Other variables that are related to both smoking cessation and weight change could create a spurious association.
+
+3. Selection Bias: The group of individuals who choose to quit smoking might differ significantly from those who continue to smoke in ways that also affect weight gain. If we were to randomise assignment to treatement, this would not be an issue as one would expect these other factors to be equally distributed amongst the treated and untreated groups.
+
+```{r agebytrt, dpi=100, echo=FALSE, message=FALSE}
+# Generate back-to-back histograms of age in 
+out1 <- histbackback(split(data$age, data$qsmk), 
+                     brks=25:75, # Adjusted breakpoints to align with the actual age range
+                     xlim=c(-90, 30), axes=FALSE)
+axis(1) 
+ageTicks <- seq(25, 75, by=10) 
+axis(2, at=ageTicks - min(ageTicks), las=1, labels=ageTicks)
+mtext(c("Untreated", "Treated"), side=1, at=c(-40.5, 7.5), line=3, cex=1.5)
+mtext("Age", side=2, at=25, line=2.2, cex=1.8)
+barplot(-out1$left, col="royalblue", horiz=TRUE, space=0, add=TRUE, axes=FALSE)
+barplot(out1$right, col="darkred", horiz=TRUE, space=0, add=TRUE, axes=FALSE)
+```
+
+
+
+```{r smokeintensbytrt, dpi=100, echo=FALSE, message=FALSE}
+out1 <- histbackback(split(data$smokeintensity, data$qsmk), 
+                     brks=seq(0, 80, by=1), # Defines bins for smoking intensity
+                     xlim=c(-500, 200), # Adjust xlim if necessary to fit your data
+                     axes=FALSE) # Initial axes off for custom settings
+
+# Add the x-axis
+axis(1)
+
+# Add the y-axis with corrected settings
+axis(2, las=1) # Ensure labels match the intended range
+
+# Label groups as "Untreated" and "Treated"
+mtext(c("Untreated", "Treated"), side=1, at=c(-250, 100), line=3, cex=1.5) # Adjust 'at' as needed
+
+# Add a label for smoking intensity on the y-axis
+mtext("Smoking intensity", side=2, at=40, line=2.2, cex=1.8) # Adjust 'at' for label positioning
+
+# Overlay the histogram data for both groups
+barplot(-out1$left, col="royalblue", horiz=TRUE, space=0, add=TRUE, axes=FALSE) # For "Untreated"
+barplot(out1$right, col="darkred", horiz=TRUE, space=0, add=TRUE, axes=FALSE) # For "Treated"
+
+
+```
+```{r}
+# T test to see if they are statistically significant
+t.test(age ~ qsmk, data=data) #  p-value = 1.632e-06
+```
+
+# IP weighting
+
+To adjust for these confounding factors, we use inverse probability weighting (IPW). IPW uses the probability of receiving the treatment (propensity score) to create a weighted dataset in which the distribution of observed baseline covariates is independent of treatment assignment. By doing this, IPW attempts to mimic a randomized controlled trial, where the only systematic difference between the treatment groups is the treatment itself.
+
+
+```{r}
+# Logistic regression to calculate propensity scores
+m.ps <- glm(qsmk~ sex + age + race + education + smokeintensity + active+ exercise + wt71, family="binomial", data=data)
+data$ps <- predict(m.ps, type="response")
+summary(data$ps)
+```
+
+
+```{r psbytrt, fig.height=5, fig.width=12, dpi=100, echo=FALSE}
+par(mfrow=c(1, 2))
+outps <- histbackback(split(data$ps, data$qsmk), axes=FALSE)
+axis(1)
+axis(2, las=1, at=1:length(outps$breaks)-0.5,
+     labels=round(seq(min(data$ps), max(data$ps), length.out=length(outps$breaks)), 2))
+mtext(c("Untreated", "Treated"), side=1, at=c(-150, 50), line=3, cex=1.5)
+mtext("Propensity score", side=2, at=6, line=3, cex=1.5)
+barplot(-outps$left, col="royalblue" , horiz=TRUE, space=0, add=TRUE, axes=FALSE)
+barplot(outps$right, col="darkred", horiz=TRUE, space=0, add=TRUE, axes=FALSE)
+plot(data$ps, jitter(data$qsmk+0.5), pch=16, cex=0.5, axes=FALSE, type="p",
+     col=c("royalblue", "darkred")[data$qsmk+1], xlim=c(0,1), ylim=c(0,2), xlab="", ylab="")
+axis(1)
+mtext(c("Untreated", "Treated"), side=2, at=c(0.5, 1.5), line=3, las=1, adj=0.2, cex=1.5)
+mtext("Propensity score", side=1, at=0.5, line=2.5, cex=1.5)
+lines(quantile(data$ps[data$qsmk==0])[c(2,4)], c(0.85, 0.85), col="royalblue")
+lines(rep(quantile(data$ps[data$qsmk==0])[3], 2), c(0.8, 0.9), col="royalblue")
+lines(quantile(data$ps[data$qsmk==1])[c(2,4)], c(1.15, 1.15), col="darkred")
+lines(rep(quantile(data$ps[data$qsmk==1])[3], 2), c(1.1, 1.2), col="darkred")
+```
+
+```{r}
+# Calculate inverse probability weighting
+data$ipw <- ifelse(data$qsmk == 1, 
+                       1 / data$ps, 
+                       1 / (1 - data$ps))
+```
+
+
+```{r ipwplot, fig.height=5, fig.width=12, dpi=100, echo=FALSE}
+data_min <- min(data$ipw, na.rm = TRUE)
+data_max <- max(data$ipw, na.rm = TRUE)
+
+# Then, set up your breaks to span this range
+# For example, create breaks from a little below the minimum to a little above the maximum
+brks <- seq(from = data_min - 1, to = data_max + 1, by = 0.5)  # Adjust 'by' for desired bin width
+
+# Now, use these breaks in your histbackback call or equivalent histogram function
+outps <- histbackback(split(data$ipw, data$qsmk), brks = brks, axes = FALSE)
+
+
+axis(1)
+axis(2, las=1, at=1:length(outps$breaks)-0.5,
+     labels=round(seq(min(data$ps), max(data$ps), length.out=length(outps$breaks)), 2))
+mtext(c("Untreated", "Treated"), side=1, at=c(-150, 50), line=3, cex=1.5)
+mtext("IPW", side=2, at=6, line=3, cex=1.5)
+barplot(-outps$left, col="royalblue" , horiz=TRUE, space=0, add=TRUE, axes=FALSE)
+barplot(outps$right, col="darkred", horiz=TRUE, space=0, add=TRUE, axes=FALSE)
+```
+
+
+```{r}
+simple_model_weighted <- lm(wt82_71 ~ qsmk, data = data, weights = data$ipw)
+summary(simple_model_weighted)
+```
+
+# IP weighting stablized
+
+```{r}
+
+```
+
